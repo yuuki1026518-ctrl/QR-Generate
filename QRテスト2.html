@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>高機能QRセキュリティ・総合検証ツール</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <style>
+        body { font-family: "Meiryo", "Hiragino Kaku Gothic ProN", sans-serif; display: flex; gap: 15px; padding: 15px; background: #1e1e1e; color: #f5f5f5; font-size: 13px; }
+        .panel { background: #2a2a2a; padding: 15px; border-radius: 8px; border: 1px solid #444; box-sizing: border-box; }
+        .col-left { width: 320px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; max-height: 95vh; }
+        .col-center { display: flex; flex-direction: column; align-items: center; width: 400px; }
+        .col-right { flex-grow: 1; display: flex; flex-direction: column; }
+        
+        h3 { margin-top: 0; margin-bottom: 10px; font-size: 14px; border-bottom: 1px solid #555; padding-bottom: 5px; color: #4CAF50; }
+        label { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; font-size: 12px; }
+        input[type="text"], input[type="number"], select { background: #111; color: #fff; border: 1px solid #555; padding: 4px; width: 140px; }
+        input[type="range"] { width: 140px; }
+        
+        canvas { border: 2px solid #555; background: #fff; margin-bottom: 10px; cursor: crosshair; }
+        
+        button { cursor: pointer; padding: 8px; border: none; border-radius: 4px; font-weight: bold; width: 100%; transition: 0.2s; margin-bottom: 5px; }
+        .btn-primary { background: #007bff; color: white; }
+        .btn-primary:hover { background: #0056b3; }
+        .btn-success { background: #28a745; color: white; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn-warning { background: #ffc107; color: black; }
+        
+        .log-area { flex-grow: 1; overflow-y: auto; background: #000; border: 1px solid #444; padding: 10px; font-family: monospace; font-size: 12px; line-height: 1.5; }
+        .log-entry { margin-bottom: 4px; border-bottom: 1px dashed #333; padding-bottom: 2px; }
+        .log-time { color: #888; }
+        .log-info { color: #5bc0de; }
+        .log-success { color: #5cb85c; }
+        .log-fail { color: #d9534f; }
+        .log-phase { color: #f0ad4e; font-weight: bold; margin-top: 5px; }
+        
+        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; background: #111; padding: 10px; border-radius: 4px; }
+        .stat-item { text-align: center; }
+        .stat-value { font-size: 18px; font-weight: bold; color: #4CAF50; }
+    </style>
+</head>
+<body>
+
+<div class="panel col-left">
+    <h3>1. 描画・デザイン設定</h3>
+    <label>基本データ: <input type="text" id="baseText" value="https://example.com/security"></label>
+    <label>誤り訂正レベル: 
+        <select id="eccLevel" onchange="generateRawQR()">
+            <option value="L">L (復元 7%)</option>
+            <option value="M">M (復元 15%)</option>
+            <option value="Q">Q (復元 25%)</option>
+            <option value="H" selected>H (復元 30%)</option>
+        </select>
+    </label>
+    <label>サイズ・解像度: <input type="number" id="qrSize" value="300" step="50" onchange="generateRawQR()"></label>
+    <label>色相 (Hue): <input type="range" id="qrHue" min="0" max="360" value="0" oninput="generateRawQR()"></label>
+    <label>彩度 (Saturation): <input type="range" id="qrSat" min="0" max="100" value="100" oninput="generateRawQR()"></label>
+    <label>透明度 (Alpha): <input type="range" id="qrAlpha" min="0.1" max="1.0" step="0.1" value="1.0" oninput="generateRawQR()"></label>
+    <button class="btn-primary" onclick="generateRawQR()">手動リセット・再生成</button>
+
+    <h3>2. OTP（ワンタイム）設定</h3>
+    <label><input type="checkbox" id="otpEnabled"> ワンタイムQR自動生成を有効化</label>
+    <label>生成インターバル(ms): <input type="number" id="otpInterval" value="2000" step="100"></label>
+
+    <h3>3. 自動妨害・欠損設定</h3>
+    <label><input type="checkbox" id="autoDamageEnabled"> 自動欠損・妨害を適用</label>
+    <label>妨害の強度 (図形数): <input type="number" id="damagePower" value="3" min="1" max="20"></label>
+    <label>妨害色: <input type="color" id="damageColor" value="#ff0000"></label>
+
+    <h3>4. 自動テスト・判定設定</h3>
+    <label><input type="checkbox" id="autoJudgeEnabled" checked> 描画・更新時に自動判定する</label>
+    <label>最大試行回数: <input type="number" id="maxTrials" value="50"></label>
+    <label><input type="checkbox" id="stopOnFail" checked> 失敗時に停止して画像を保存</label>
+    
+    <button id="testBtn" class="btn-success" onclick="toggleAutoTest()">▶ 自動テスト実行</button>
+
+    <div class="stat-grid">
+        <div class="stat-item">成功<div id="statSuccess" class="stat-value">0</div></div>
+        <div class="stat-item">失敗<div id="statFail" class="stat-value" style="color:#d9534f;">0</div></div>
+        <div class="stat-item">成功率<div id="statRate" class="stat-value">0%</div></div>
+        <div class="stat-item">平均読取<div id="statTime" class="stat-value">0ms</div></div>
+    </div>
+</div>
+
+<div class="panel col-center">
+    <h3>手動操作・プレビュー</h3>
+    <canvas id="mainCanvas" width="300" height="300"></canvas>
+    
+    <div style="width: 100%; text-align: left;">
+        <label>手動隠蔽ツール: 
+            <select id="drawTool">
+                <option value="rect">矩形一括塗りつぶし</option>
+                <option value="brush">自由描画（ブラシ）</option>
+            </select>
+        </label>
+        <p style="font-size: 11px; color: #aaa; margin-top:0;">※キャンバス上をドラッグして意図的な欠損を作れます。</p>
+        <button class="btn-warning" onclick="manualAnalyze()">確定して解析ログを出力（手動判定）</button>
+    </div>
+    
+    <div id="rawQrContainer" style="display:none;"></div>
+    <a id="downloadLink" style="display:none;"></a>
+</div>
+
+<div class="panel col-right">
+    <h3>解析ログ・過程表示</h3>
+    <div class="log-area" id="logPanel">
+        <div class="log-entry log-info">[SYSTEM] 初期化完了。待機中です。</div>
+    </div>
+</div>
+
+<script>
+    // --- グローバル変数 ---
+    let canvas = document.getElementById('mainCanvas');
+    let ctx = canvas.getContext('2d', { willReadFrequently: true });
+    let isDrawing = false;
+    
+    // 自動テスト用ステータス
+    let testIsRunning = false;
+    let testTimer = null;
+    let stats = { trials: 0, success: 0, fail: 0, totalTime: 0 };
+
+    // --- ログ出力関数 ---
+    function addLog(msg, type = 'info') {
+        const timeStr = new Date().toLocaleTimeString('ja-JP', { hour12: false, fractionalSecondDigits: 2 });
+        const div = document.createElement('div');
+        div.className = `log-entry log-${type}`;
+        
+        if (type === 'phase') {
+            div.innerHTML = `<br>■ ${msg}`;
+        } else {
+            div.innerHTML = `<span class="log-time">[${timeStr}]</span> ${msg}`;
+        }
+        
+        const panel = document.getElementById('logPanel');
+        panel.prepend(div);
+    }
+
+    // --- QRコード生成（ベース） ---
+    function generateRawQR(isOtp = false) {
+        const text = isOtp ? "OTP-" + crypto.randomUUID().substring(0, 8) : document.getElementById('baseText').value;
+        const level = document.getElementById('eccLevel').value;
+        const size = parseInt(document.getElementById('qrSize').value);
+        const hue = document.getElementById('qrHue').value;
+        const sat = document.getElementById('qrSat').value;
+        const alpha = document.getElementById('qrAlpha').value;
+        
+        // HSLからカラーコードを作成（QRCode.jsに渡すため）
+        const colorDark = `hsla(${hue}, ${sat}%, 20%, ${alpha})`;
+        
+        // キャンバスリサイズ
+        if (canvas.width !== size) {
+            canvas.width = size;
+            canvas.height = size;
+        }
+
+        const container = document.getElementById('rawQrContainer');
+        container.innerHTML = "";
+        
+        try {
+            new QRCode(container, {
+                text: text,
+                width: size,
+                height: size,
+                colorDark: colorDark,
+                colorLight: "#ffffff",
+                correctLevel: QRCode.CorrectLevel[level]
+            });
+
+            // Canvasへ描画
+            setTimeout(() => {
+                const img = container.querySelector('img');
+                if(img) {
+                    ctx.fillStyle = "#ffffff";
+                    ctx.fillRect(0, 0, size, size); // 背景白
+                    ctx.drawImage(img, 0, 0, size, size);
+                    if (!testIsRunning) addLog(`QRコード生成完了 (ECC: ${level}, Size: ${size})`, 'info');
+                }
+            }, 50);
+        } catch (e) {
+            addLog(`QR生成エラー: データ量が多すぎるか設定が不正です。`, 'fail');
+        }
+    }
+
+    // --- 手動隠蔽（マウス操作） ---
+    canvas.addEventListener('mousedown', (e) => {
+        isDrawing = true;
+        drawManualDamage(e);
+    });
+    canvas.addEventListener('mousemove', (e) => {
+        if (!isDrawing) return;
+        const tool = document.getElementById('drawTool').value;
+        if (tool === 'brush') drawManualDamage(e);
+    });
+    canvas.addEventListener('mouseup', () => {
+        isDrawing = false;
+        if (document.getElementById('autoJudgeEnabled').checked && !testIsRunning) {
+            analyzeQR();
+        }
+    });
+
+    function drawManualDamage(e) {
+        const rect = canvas.getBoundingClientRect();
+        const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+        const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+        const tool = document.getElementById('drawTool').value;
+        const color = document.getElementById('damageColor').value;
+        
+        ctx.fillStyle = color;
+        if (tool === 'rect') {
+            ctx.fillRect(x - 20, y - 20, 40, 40); // 矩形一括
+        } else {
+            ctx.beginPath();
+            ctx.arc(x, y, 5, 0, Math.PI * 2); // ブラシ
+            ctx.fill();
+        }
+    }
+
+    // --- 自動妨害適用 ---
+    function applyAutoDamage() {
+        const power = parseInt(document.getElementById('damagePower').value);
+        const color = document.getElementById('damageColor').value;
+        const size = canvas.width;
+        ctx.fillStyle = color;
+        
+        for (let i = 0; i < power; i++) {
+            const x = Math.random() * size;
+            const y = Math.random() * size;
+            const shapeSize = (size * 0.05) + (Math.random() * size * 0.1); // 画面の5%〜15%のサイズ
+            
+            if (Math.random() > 0.5) {
+                ctx.fillRect(x, y, shapeSize, shapeSize);
+            } else {
+                ctx.beginPath();
+                ctx.arc(x, y, shapeSize/2, 0, Math.PI*2);
+                ctx.fill();
+            }
+        }
+    }
+
+    // --- 解析・判定ロジック（手動確定ボタン用） ---
+    function manualAnalyze() {
+        addLog("=== 手動解析を実行 ===", "phase");
+        analyzeQR();
+    }
+
+    // --- メイン解析機能（自動・手動共通） ---
+    function analyzeQR() {
+        const size = canvas.width;
+        const imageData = ctx.getImageData(0, 0, size, size);
+        
+        if (!testIsRunning) addLog("過程1: 画像データの取得とデコード準備...", "info");
+        
+        // 時間測定開始
+        const startTime = performance.now();
+        const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "dontInvert" });
+        const endTime = performance.now();
+        const calcTime = (endTime - startTime).toFixed(1);
+
+        if (code) {
+            if (!testIsRunning) {
+                addLog(`過程2: デコード成功。エラー訂正アルゴリズムが機能しました。`, "success");
+                addLog(`結果: 【 ${code.data} 】 (測定時間: ${calcTime}ms)`, "success");
+            }
+            return { success: true, time: calcTime, data: code.data };
+        } else {
+            if (!testIsRunning) {
+                addLog(`過程2: デコード失敗。読み取り不可能です。(測定時間: ${calcTime}ms)`, "fail");
+                analyzeFailureCause(imageData, size);
+            }
+            return { success: false, time: calcTime, data: null };
+        }
+    }
+
+    // --- 不能原因の詳しい原因分析 ---
+    function analyzeFailureCause(imageData, size) {
+        addLog("過程3: 詳細な不能原因の特定を実行します...", "phase");
+        
+        // ファインダーパターン（三隅）のだいたいの位置（サイズ比率で計算）
+        const fpSize = Math.floor(size * 0.2); 
+        const corners = [
+            { name: "左上", x: 0, y: 0 },
+            { name: "右上", x: size - fpSize, y: 0 },
+            { name: "左下", x: 0, y: size - fpSize }
+        ];
+
+        let damagedCorners = 0;
+
+        corners.forEach(c => {
+            const cData = ctx.getImageData(c.x, c.y, fpSize, fpSize).data;
+            let foreignColorPixels = 0;
+            // 白黒（または生成色）以外の色が乗っているか簡易検知
+            for (let i = 0; i < cData.length; i += 4) {
+                const r = cData[i], g = cData[i+1], b = cData[i+2];
+                // 今回は妨害色（例：赤）などの極端な色差や、白黒が崩れているかを判定
+                if (r > 200 && g < 100 && b < 100) foreignColorPixels++; 
+            }
+            
+            const damageRatio = foreignColorPixels / (fpSize * fpSize);
+            if (damageRatio > 0.2) {
+                addLog(`警告: ${c.name}の「位置検出パターン」が ${Math.round(damageRatio*100)}% 欠損/汚染されています。`, "fail");
+                damagedCorners++;
+            } else {
+                addLog(`確認: ${c.name}の「位置検出パターン」は概ね正常です。`, "success");
+            }
+        });
+
+        if (damagedCorners > 0) {
+            addLog(`【分析結論】: 位置検出パターンが破壊されたため、スキャナーがQRコードの座標や傾きを認識できていません。`, "fail");
+        } else {
+            const ecc = document.getElementById('eccLevel').value;
+            addLog(`【分析結論】: 検出パターンは正常ですが、データ領域の汚染が誤り訂正レベル(${ecc})の限界を超過しています。またはコントラスト不足です。`, "fail");
+        }
+    }
+
+    // --- 自動テストループ制御 ---
+    function toggleAutoTest() {
+        const btn = document.getElementById('testBtn');
+        if (testIsRunning) {
+            // 停止処理
+            testIsRunning = false;
+            clearTimeout(testTimer);
+            btn.innerHTML = "▶ 自動テスト実行";
+            btn.className = "btn-success";
+            addLog("自動テストを手動で停止しました。", "info");
+        } else {
+            // 開始処理
+            stats = { trials: 0, success: 0, fail: 0, totalTime: 0 };
+            updateStatsUI();
+            testIsRunning = true;
+            btn.innerHTML = "■ テスト停止";
+            btn.className = "btn-danger";
+            addLog("=== 自動テストシーケンス開始 ===", "phase");
+            runAutoTestCycle();
+        }
+    }
+
+    function runAutoTestCycle() {
+        if (!testIsRunning) return;
+
+        const maxTrials = parseInt(document.getElementById('maxTrials').value);
+        if (stats.trials >= maxTrials) {
+            addLog(`設定された試行回数(${maxTrials}回)に到達。テスト完了。`, "success");
+            toggleAutoTest();
+            return;
+        }
+
+        stats.trials++;
+        const isOtp = document.getElementById('otpEnabled').checked;
+        
+        // 1. 生成
+        generateRawQR(isOtp);
+
+        setTimeout(() => {
+            // 2. 自動妨害
+            if (document.getElementById('autoDamageEnabled').checked) {
+                applyAutoDamage();
+            }
+
+            // 3. 判定
+            if (document.getElementById('autoJudgeEnabled').checked) {
+                const result = analyzeQR();
+                stats.totalTime += parseFloat(result.time);
+                
+                if (result.success) {
+                    stats.success++;
+                    addLog(`試行 ${stats.trials}: 読取成功 [${result.time}ms]`, "success");
+                } else {
+                    stats.fail++;
+                    addLog(`試行 ${stats.trials}: 読取失敗 [${result.time}ms]`, "fail");
+                    
+                    if (document.getElementById('stopOnFail').checked) {
+                        saveFailedImage();
+                        addLog("設定に基づき、失敗画像を保存しテストを強制停止しました。", "info");
+                        toggleAutoTest();
+                        updateStatsUI();
+                        return; // ここでループ脱出
+                    }
+                }
+                updateStatsUI();
+            }
+
+            // 次のサイクルへ
+            const interval = parseInt(document.getElementById('otpInterval').value);
+            testTimer = setTimeout(runAutoTestCycle, interval);
+        }, 100); // 描画完了を待つバッファ
+    }
+
+    // --- 統計UIの更新 ---
+    function updateStatsUI() {
+        document.getElementById('statSuccess').innerText = stats.success;
+        document.getElementById('statFail').innerText = stats.fail;
+        
+        const total = stats.success + stats.fail;
+        const rate = total > 0 ? Math.round((stats.success / total) * 100) : 0;
+        document.getElementById('statRate').innerText = `${rate}%`;
+        
+        const avgTime = stats.success > 0 ? (stats.totalTime / stats.success).toFixed(1) : 0;
+        document.getElementById('statTime').innerText = `${avgTime}ms`;
+    }
+
+    // --- 失敗画像の保存 ---
+    function saveFailedImage() {
+        const link = document.getElementById('downloadLink');
+        link.href = canvas.toDataURL("image/png");
+        link.download = `QR_FAIL_Trial${stats.trials}_${new Date().getTime()}.png`;
+        link.click();
+    }
+
+    // 初回起動時
+    window.onload = () => {
+        generateRawQR();
+    };
+</script>
+
+</body>
+</html>
